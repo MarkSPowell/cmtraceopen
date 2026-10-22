@@ -613,12 +613,26 @@ describe("merged tab live tailing", () => {
     renderHook(() => useFileWatcher());
     await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
   }
+  // The watcher only accepts batches that report having read through their
+  // highest line, so report exactly that unless a test says otherwise.
+  const throughLine = (payload: Partial<TailPayload>) =>
+    Math.max(
+      0,
+      ...(payload.entries ?? []).map((e) => e.lineNumber + e.message.split("\n").length - 1),
+      ...(payload.amendments ?? []).map((a) => a.continuationEndLine),
+    ) || null;
   const emit = (payload: Partial<TailPayload>) =>
     act(() => {
-      // The watcher only accepts batches that report having read past their lines.
-      eventMocks.tailListener?.({ payload: emptyTailPayload({ observedThroughLine: 10, ...payload }) });
+      eventMocks.tailListener?.({
+        payload: emptyTailPayload({ observedThroughLine: throughLine(payload), ...payload }),
+      });
     });
   const messages = () => useLogStore.getState().entries.map((e) => e.message);
+  function entryWithMessage(message: string): LogEntry {
+    const found = useLogStore.getState().entries.find((e) => e.message === message);
+    if (!found) throw new Error(`fixture row "${message}" is missing from the merged view`);
+    return found;
+  }
 
   it("starts each source's tail where its tab snapshot left off", async () => {
     seedMergedTab();
@@ -698,7 +712,7 @@ describe("merged tab live tailing", () => {
 
   it("clears the selection when the selected row's source is reset", async () => {
     await mountMerged();
-    const selected = useLogStore.getState().entries.find((e) => e.message === "agent start")!;
+    const selected = entryWithMessage("agent start");
     act(() => {
       useLogStore.setState({ selectedId: selected.id, autoCorrelate: true, correlationWindowMs: 5_000 });
       useLogStore.getState().updateCorrelation();
@@ -715,7 +729,7 @@ describe("merged tab live tailing", () => {
 
   it("keeps the selection and refreshes correlation when another source is reset", async () => {
     await mountMerged();
-    const selected = useLogStore.getState().entries.find((e) => e.message === "ime start")!;
+    const selected = entryWithMessage("ime start");
     act(() => {
       useLogStore.setState({ selectedId: selected.id, autoCorrelate: true, correlationWindowMs: 5_000 });
       useLogStore.getState().updateCorrelation();
@@ -741,6 +755,33 @@ describe("merged tab live tailing", () => {
 
     expect(useLogStore.getState().entries).toBe(before);
     expect(messages()).toContain("agent start");
+  });
+
+  it("drops lines a restarted watcher replays from the snapshot offset", async () => {
+    await mountMerged();
+    const batch = { filePath: AGENT, entries: [tailed(AGENT, 2, 3_000, "agent finished")] };
+    emit(batch);
+
+    // Any change to the start effect's inputs restarts every merged tail from
+    // its original snapshot offset, so the native reader re-sends line 2.
+    act(() => useLogStore.setState({ formatDetected: "Plain" }));
+    await waitFor(() =>
+      expect(startTailMock.mock.calls.filter((call) => call[0] === AGENT)).toHaveLength(2),
+    );
+    emit(batch);
+    emit({ filePath: AGENT, entries: [tailed(AGENT, 3, 3_500, "agent next")] });
+
+    expect(messages()).toEqual(["ime start", "agent start", "agent finished", "agent next", "ime later"]);
+  });
+
+  it("accepts low line numbers again after a source resets", async () => {
+    await mountMerged();
+    emit({ filePath: AGENT, entries: [tailed(AGENT, 2, 3_000, "agent finished")] });
+
+    emit({ filePath: AGENT, reset: true, entries: [tailed(AGENT, 1, 5_000, "agent rotated")] });
+    emit({ filePath: AGENT, entries: [tailed(AGENT, 2, 6_000, "agent after rotation")] });
+
+    expect(messages()).toEqual(["ime start", "ime later", "agent rotated", "agent after rotation"]);
   });
 
   it("stops every merged tail when the merged tab closes", async () => {

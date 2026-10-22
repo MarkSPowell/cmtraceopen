@@ -78,7 +78,8 @@ describe("mergeEntries continuation lines", () => {
       ime: [entry("C:\\logs\\ime.log", 1, 1_200), entry("C:\\logs\\ime.log", 2, 8_900)],
       plain: [entry("C:\\logs\\notes.txt", 1, null)],
     });
-    const target = merged.find((item) => item.message === "C:\\logs\\app.log:7")!;
+    const target = merged.find((item) => item.message === "C:\\logs\\app.log:7");
+    if (!target) throw new Error("fixture row app.log:7 is missing from the merge");
 
     const correlated = findCorrelatedEntries(merged, target, 500, {});
 

@@ -17,6 +17,12 @@ export interface MergedTabState {
    * the watcher does not restart (and re-read lines) on every tail batch.
    */
   sourceTails?: Record<string, MergedSourceTail>;
+  /**
+   * Highest physical line merged from each tailed source. A watcher restart
+   * re-reads from the `sourceTails` offset, so lines at or below this cursor
+   * are replays and are dropped. A truncation/rotation reset restarts it.
+   */
+  tailCursors?: Record<string, number>;
 }
 
 export interface MergedSourceTail {
@@ -151,6 +157,11 @@ export function replaceFileInMerge(
   while (i < others.length) result[k++] = others[i++];
   while (j < keyed.length) result[k++] = keyed[j++];
   return result;
+}
+
+/** Last physical line an entry covers (multi-line records span several). */
+export function entryEndLine(entry: LogEntry): number {
+  return entry.lineNumber + entry.message.split("\n").length - 1;
 }
 
 export function filterByVisibility(

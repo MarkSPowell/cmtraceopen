@@ -234,7 +234,7 @@ export function useFileWatcher() {
         }
 
         if (reset) {
-          resetMergedEntries(filePath, newEntries);
+          resetMergedEntries(filePath, newEntries, observedThroughLine);
           return;
         }
 
@@ -242,9 +242,8 @@ export function useFileWatcher() {
           amendMergedEntry(filePath, amendment);
         }
 
-        if (newEntries.length > 0) {
-          appendMergedEntries(filePath, newEntries);
-        }
+        // Also called for an empty batch, so the replay cursor still advances.
+        appendMergedEntries(filePath, newEntries, observedThroughLine);
         return;
       }
 
