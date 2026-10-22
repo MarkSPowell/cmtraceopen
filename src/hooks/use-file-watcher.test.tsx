@@ -549,7 +549,7 @@ describe("merged tab live tailing", () => {
     cleanup();
   });
 
-  function seedMergedTab() {
+  function seedMergedTab(options: { firewallPaths?: string[] } = {}) {
     const at = (filePath: string, id: number, lineNumber: number, timestamp: number, message: string): LogEntry => ({
       ...multilineEntry(), id, lineNumber, timestamp, message, filePath,
     });
@@ -562,7 +562,14 @@ describe("merged tab live tailing", () => {
         parserSelection: PLAIN_SELECTION, sourceOpenMode: "single-file", selectedSourceFilePath: filePath, activeColumns: ["message"],
       });
     }
-    useLogStore.setState({ openFilePath: "/logs/IntuneManagementExtension.log", formatDetected: "Timestamped" });
+    useLogStore.setState({
+      openFilePath: "/logs/IntuneManagementExtension.log",
+      formatDetected: "Timestamped",
+      // Only presence matters to merged tabs; the firewall session shape is owned elsewhere.
+      firewallSources: Object.fromEntries(
+        (options.firewallPaths ?? []).map((path) => [path, { sessionId: "fw", watchEpoch: 0, active: false }]),
+      ) as never,
+    });
     useLogStore.getState().createMergedTab(["/logs/IntuneManagementExtension.log", "/logs/AgentExecutor.log"]);
   }
 
@@ -687,6 +694,53 @@ describe("merged tab live tailing", () => {
       expect(pauseTail).toHaveBeenCalledWith(IME);
       expect(pauseTail).toHaveBeenCalledWith(AGENT);
     });
+  });
+
+  it("clears the selection when the selected row's source is reset", async () => {
+    await mountMerged();
+    const selected = useLogStore.getState().entries.find((e) => e.message === "agent start")!;
+    act(() => {
+      useLogStore.setState({ selectedId: selected.id, autoCorrelate: true, correlationWindowMs: 5_000 });
+      useLogStore.getState().updateCorrelation();
+    });
+    expect(useLogStore.getState().correlatedEntries).not.toHaveLength(0);
+
+    emit({ filePath: AGENT, reset: true, entries: [tailed(AGENT, 1, 2_000, "agent rotated")] });
+
+    const state = useLogStore.getState();
+    expect(state.selectedId).toBeNull();
+    expect(state.correlatedEntries).toEqual([]);
+    expect(state.entries.find((e) => e.message === "agent rotated")?.id).not.toBe(selected.id);
+  });
+
+  it("keeps the selection and refreshes correlation when another source is reset", async () => {
+    await mountMerged();
+    const selected = useLogStore.getState().entries.find((e) => e.message === "ime start")!;
+    act(() => {
+      useLogStore.setState({ selectedId: selected.id, autoCorrelate: true, correlationWindowMs: 5_000 });
+      useLogStore.getState().updateCorrelation();
+    });
+    expect(useLogStore.getState().correlatedEntries.map((c) => c.entry.message)).toEqual(["agent start"]);
+
+    emit({ filePath: AGENT, reset: true, entries: [tailed(AGENT, 1, 60_000, "agent rotated")] });
+
+    const state = useLogStore.getState();
+    expect(state.selectedId).toBe(selected.id);
+    expect(state.correlatedEntries).toEqual([]);
+  });
+
+  it("leaves firewall sources as a snapshot and ignores their tail events", async () => {
+    seedMergedTab({ firewallPaths: [AGENT] });
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(startTailMock).toHaveBeenCalledWith(IME, "Timestamped", 100, 0, 3));
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+    expect(startTailMock.mock.calls.map((call) => call[0])).not.toContain(AGENT);
+    const before = useLogStore.getState().entries;
+
+    emit({ filePath: AGENT, entries: [tailed(AGENT, 2, 3_000, "firewall row")] });
+
+    expect(useLogStore.getState().entries).toBe(before);
+    expect(messages()).toContain("agent start");
   });
 
   it("stops every merged tail when the merged tab closes", async () => {
