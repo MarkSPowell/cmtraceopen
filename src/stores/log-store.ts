@@ -26,10 +26,13 @@ import { getBaseName } from "../lib/file-paths";
 import { buildGuidNameMap, mergeGuidNameMap } from "../lib/guid-name-map";
 import {
   type MergedTabState,
+  type MergedSourceTail,
   type CorrelatedEntry,
   assignFileColors,
   buildMergeCacheKey,
+  countEntriesByFile,
   mergeEntries,
+  replaceFileInMerge,
   filterByVisibility,
   findCorrelatedEntries,
 } from "../lib/merge-entries";
@@ -507,6 +510,30 @@ function buildAggregateFileOrder(files: AggregateSourceFile[]): Record<string, n
   return Object.fromEntries(files.map((file, index) => [file.filePath, index]));
 }
 
+/** Ids in a merged tab are unique across files; new rows go after the highest. */
+function nextMergedId(entries: LogEntry[]): number {
+  let maxId = -1;
+  for (const entry of entries) {
+    if (entry.id > maxId) maxId = entry.id;
+  }
+  return maxId + 1;
+}
+
+/** State fields to publish after a merged tab's timeline changes. */
+function withMergedEntries(
+  merged: MergedTabState,
+  mergedEntries: LogEntry[],
+): Pick<LogState, "mergedTabState" | "entries"> {
+  return {
+    mergedTabState: {
+      ...merged,
+      mergedEntries,
+      cacheKey: buildMergeCacheKey(merged.sourceFilePaths, countEntriesByFile(mergedEntries)),
+    },
+    entries: filterByVisibility(mergedEntries, merged.fileVisibility),
+  };
+}
+
 function compareMergedLogEntries(
   left: LogEntry,
   right: LogEntry,
@@ -733,6 +760,12 @@ interface LogState {
   setPendingScrollTarget: (target: { filePath: string; lineNumber: number } | null) => void;
   createMergedTab: (sourceFilePaths: string[]) => void;
   closeMergedTab: () => void;
+  /** Insert tailed lines from one source file into the merged timeline. */
+  appendMergedEntries: (filePath: string, entries: LogEntry[]) => void;
+  /** Apply a tailed continuation to a multi-line record in the merged timeline. */
+  amendMergedEntry: (filePath: string, amendment: TailEntryAmendment) => void;
+  /** One merged source was truncated/rotated: replace its lines with the fresh read. */
+  resetMergedEntries: (filePath: string, entries: LogEntry[]) => void;
   setFileVisibility: (filePath: string, visible: boolean) => void;
   setAllFileVisibility: (visible: boolean) => void;
   setCorrelationWindowMs: (ms: number) => void;
@@ -1352,12 +1385,18 @@ export const useLogStore = create<LogState>((set, get) => ({
   createMergedTab: (sourceFilePaths) => {
     const entriesByFile: Record<string, LogEntry[]> = {};
     const entryCounts: Record<string, number> = {};
+    const sourceTails: Record<string, MergedSourceTail> = {};
 
     for (const fp of sourceFilePaths) {
       const snapshot = getCachedTabSnapshot(fp);
       if (snapshot) {
         entriesByFile[fp] = snapshot.entries;
         entryCounts[fp] = snapshot.entries.length;
+        sourceTails[fp] = {
+          formatDetected: snapshot.formatDetected ?? "Plain",
+          byteOffset: snapshot.byteOffset,
+          totalLines: snapshot.totalLines,
+        };
       }
     }
 
@@ -1382,12 +1421,81 @@ export const useLogStore = create<LogState>((set, get) => ({
         fileVisibility,
         mergedEntries: merged,
         cacheKey,
+        sourceTails,
       },
       entries: filterByVisibility(merged, fileVisibility),
       sourceOpenMode: "merged" as SourceOpenMode,
       selectedId: null,
       correlatedEntries: [],
     });
+  },
+
+  appendMergedEntries: (filePath, newEntries) => {
+    if (newEntries.length === 0) return;
+    set((state) => {
+      const merged = state.mergedTabState;
+      if (!merged || !merged.sourceFilePaths.includes(filePath)) return state;
+
+      const nextId = nextMergedId(merged.mergedEntries);
+      const added = newEntries.map((entry, index) => ({
+        ...entry,
+        filePath,
+        id: nextId + index,
+      }));
+      const fileEntries = [
+        ...merged.mergedEntries.filter((entry) => entry.filePath === filePath),
+        ...added,
+      ];
+      return {
+        ...withMergedEntries(merged, replaceFileInMerge(merged.mergedEntries, filePath, fileEntries)),
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+      };
+    });
+    recomputeAndSetMatches();
+  },
+
+  amendMergedEntry: (filePath, amendment) => {
+    let amendmentApplied = false;
+    set((state) => {
+      const merged = state.mergedTabState;
+      if (!merged) return state;
+      const index = merged.mergedEntries.findIndex(
+        (entry) => entry.filePath === filePath && canApplyTailAmendment(entry, amendment),
+      );
+      if (index < 0) return state;
+
+      amendmentApplied = true;
+      const amendedEntry = applyTailAmendment(merged.mergedEntries[index], amendment);
+      const mergedEntries = [...merged.mergedEntries];
+      mergedEntries[index] = amendedEntry;
+      return {
+        ...withMergedEntries(merged, mergedEntries),
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, [amendedEntry]),
+      };
+    });
+    if (amendmentApplied) {
+      recomputeAndSetMatches();
+    }
+  },
+
+  resetMergedEntries: (filePath, newEntries) => {
+    set((state) => {
+      const merged = state.mergedTabState;
+      if (!merged || !merged.sourceFilePaths.includes(filePath)) return state;
+
+      const remaining = merged.mergedEntries.filter((entry) => entry.filePath !== filePath);
+      const nextId = nextMergedId(remaining);
+      const fresh = newEntries.map((entry, index) => ({
+        ...entry,
+        filePath,
+        id: nextId + index,
+      }));
+      return {
+        ...withMergedEntries(merged, replaceFileInMerge(remaining, filePath, fresh)),
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+      };
+    });
+    recomputeAndSetMatches();
   },
 
   closeMergedTab: () => {
