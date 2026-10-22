@@ -1386,12 +1386,17 @@ export const useLogStore = create<LogState>((set, get) => ({
     const entriesByFile: Record<string, LogEntry[]> = {};
     const entryCounts: Record<string, number> = {};
     const sourceTails: Record<string, MergedSourceTail> = {};
+    const { firewallSources } = get();
 
     for (const fp of sourceFilePaths) {
       const snapshot = getCachedTabSnapshot(fp);
       if (snapshot) {
         entriesByFile[fp] = snapshot.entries;
         entryCounts[fp] = snapshot.entries.length;
+        // Firewall sources reconcile rows through their own session-owned
+        // path, which does not know about merged tabs, so they stay a
+        // snapshot here rather than being tailed.
+        if (firewallSources[fp]) continue;
         sourceTails[fp] = {
           formatDetected: snapshot.formatDetected ?? "Plain",
           byteOffset: snapshot.byteOffset,
@@ -1452,6 +1457,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       };
     });
     recomputeAndSetMatches();
+    useLogStore.getState().updateCorrelation();
   },
 
   amendMergedEntry: (filePath, amendment) => {
@@ -1475,6 +1481,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     });
     if (amendmentApplied) {
       recomputeAndSetMatches();
+      useLogStore.getState().updateCorrelation();
     }
   },
 
@@ -1484,18 +1491,27 @@ export const useLogStore = create<LogState>((set, get) => ({
       if (!merged || !merged.sourceFilePaths.includes(filePath)) return state;
 
       const remaining = merged.mergedEntries.filter((entry) => entry.filePath !== filePath);
-      const nextId = nextMergedId(remaining);
+      // Ids are allocated past every id the tab has used, never reused, so a
+      // fresh row cannot inherit the selection of a row that was replaced.
+      const nextId = nextMergedId(merged.mergedEntries);
       const fresh = newEntries.map((entry, index) => ({
         ...entry,
         filePath,
         id: nextId + index,
       }));
+      const selectedWasReset =
+        state.selectedId !== null &&
+        merged.mergedEntries.some(
+          (entry) => entry.id === state.selectedId && entry.filePath === filePath,
+        );
       return {
         ...withMergedEntries(merged, replaceFileInMerge(remaining, filePath, fresh)),
         guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+        ...(selectedWasReset ? { selectedId: null, correlatedEntries: [] } : {}),
       };
     });
     recomputeAndSetMatches();
+    useLogStore.getState().updateCorrelation();
   },
 
   closeMergedTab: () => {

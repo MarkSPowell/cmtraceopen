@@ -174,6 +174,11 @@ export function useFileWatcher() {
         reset,
       } = payload;
       const state = useLogStore.getState();
+      // Merged tabs do not tail firewall sources (see createMergedTab). A late
+      // firewall event must not reconcile its rows into the merged view.
+      if (state.sourceOpenMode === "merged" && (payload.firewallControl || state.firewallSources[filePath])) {
+        return;
+      }
       if (payload.firewallControl || state.firewallSources[filePath]) {
         state.applyFirewallTail(payload);
         return;
