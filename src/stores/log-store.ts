@@ -31,7 +31,7 @@ import {
   assignFileColors,
   buildMergeCacheKey,
   countEntriesByFile,
-  entryEndLine,
+  maxEntryEndLine,
   mergeEntries,
   replaceFileInMerge,
   filterByVisibility,
@@ -1454,7 +1454,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       // replays them from the original snapshot offset.
       const cursor = merged.tailCursors?.[filePath] ?? 0;
       const fresh = newEntries.filter((entry) => entry.lineNumber > cursor);
-      const nextCursor = Math.max(cursor, observedThroughLine ?? 0, ...fresh.map(entryEndLine));
+      const nextCursor = maxEntryEndLine(fresh, Math.max(cursor, observedThroughLine ?? 0));
       if (fresh.length === 0) {
         return nextCursor === cursor
           ? state
@@ -1535,7 +1535,7 @@ export const useLogStore = create<LogState>((set, get) => ({
           (entry) => entry.id === state.selectedId && entry.filePath === filePath,
         );
       // The file restarted from line 1, so the cursor restarts with it.
-      const cursor = Math.max(observedThroughLine ?? 0, ...fresh.map(entryEndLine));
+      const cursor = maxEntryEndLine(fresh, observedThroughLine ?? 0);
       return {
         ...withMergedEntries(
           withTailCursor(merged, filePath, cursor),
