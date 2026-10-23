@@ -164,6 +164,20 @@ export function entryEndLine(entry: LogEntry): number {
   return entry.lineNumber + entry.message.split("\n").length - 1;
 }
 
+/**
+ * Highest physical line covered by `entries`, never below `floor`. A loop
+ * rather than `Math.max(...spread)`: a reset batch is a whole file re-read and
+ * can exceed the engine's argument limit.
+ */
+export function maxEntryEndLine(entries: LogEntry[], floor: number): number {
+  let max = floor;
+  for (const entry of entries) {
+    const end = entryEndLine(entry);
+    if (end > max) max = end;
+  }
+  return max;
+}
+
 export function filterByVisibility(
   entries: LogEntry[],
   visibility: Record<string, boolean>

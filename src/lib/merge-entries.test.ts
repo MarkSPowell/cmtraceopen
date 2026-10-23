@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findCorrelatedEntries, mergeEntries, replaceFileInMerge } from "./merge-entries";
+import { findCorrelatedEntries, maxEntryEndLine, mergeEntries, replaceFileInMerge } from "./merge-entries";
 import type { LogEntry } from "../types/log";
 
 const entry = (filePath: string, lineNumber: number, timestamp: number | null): LogEntry =>
@@ -111,5 +111,24 @@ describe("replaceFileInMerge", () => {
     ]);
     expect(next[1]).toBe(merged[1]);
     expect(next[4]).toBe(merged[2]);
+  });
+});
+
+describe("maxEntryEndLine", () => {
+  it("returns the highest covered line, including multi-line records, never below the floor", () => {
+    const rows = [
+      { ...entry("C:\\logs\\app.log", 3, 1_000), message: "first\nsecond\nthird" },
+      entry("C:\\logs\\app.log", 4, 2_000),
+    ];
+
+    expect(maxEntryEndLine(rows, 0)).toBe(5);
+    expect(maxEntryEndLine(rows, 9)).toBe(9);
+    expect(maxEntryEndLine([], 2)).toBe(2);
+  });
+
+  it("handles a batch larger than the engine's function-argument limit", () => {
+    const rows = Array.from({ length: 300_000 }, (_, index) => entry("C:\\logs\\app.log", index + 1, index));
+
+    expect(maxEntryEndLine(rows, 0)).toBe(300_000);
   });
 });
