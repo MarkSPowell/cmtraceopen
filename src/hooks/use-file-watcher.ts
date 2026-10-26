@@ -97,7 +97,10 @@ export function useFileWatcher() {
       return () => cleanups.forEach(cleanup => cleanup());
     }
 
-    if (!openFilePath || !formatDetected) return;
+    // Only a single-file view owns `openFilePath`'s tail. Closing a merged or
+    // diff view clears the mode but leaves the path, and restarting a tail
+    // there would append stale-offset rows to the emptied view.
+    if (sourceOpenMode !== "single-file" || !openFilePath || !formatDetected) return;
 
     const byteOffset = useLogStore.getState().byteOffset;
     const totalLines = useLogStore.getState().totalLines;
@@ -141,7 +144,7 @@ export function useFileWatcher() {
       return;
     }
 
-    if (!openFilePath) return;
+    if (sourceOpenMode !== "single-file" || !openFilePath) return;
 
     const token = currentFirewallControl(openFilePath);
     if (!token && useLogStore.getState().firewallSources[openFilePath]) return;

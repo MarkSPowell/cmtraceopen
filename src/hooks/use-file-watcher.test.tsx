@@ -784,6 +784,18 @@ describe("merged tab live tailing", () => {
     expect(messages()).toEqual(["ime start", "ime later", "agent rotated", "agent after rotation"]);
   });
 
+  it("does not start a single-file tail when the merged tab closes", async () => {
+    await mountMerged();
+    await waitFor(() => expect(startTailMock).toHaveBeenCalledTimes(2));
+
+    act(() => useLogStore.getState().closeMergedTab());
+    await waitFor(() => expect(stopTailMock).toHaveBeenCalledTimes(2));
+
+    // openFilePath still names the IME log, but no view owns its tail now.
+    expect(useLogStore.getState().openFilePath).toBe(IME);
+    expect(startTailMock).toHaveBeenCalledTimes(2);
+  });
+
   it("stops every merged tail when the merged tab closes", async () => {
     await mountMerged();
     await waitFor(() => expect(startTailMock).toHaveBeenCalledTimes(2));
