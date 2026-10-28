@@ -97,9 +97,8 @@ export function useFileWatcher() {
       return () => cleanups.forEach(cleanup => cleanup());
     }
 
-    // Only a single-file view owns `openFilePath`'s tail. Closing a merged or
-    // diff view clears the mode but leaves the path, and restarting a tail
-    // there would append stale-offset rows to the emptied view.
+    // Only a single-file view owns `openFilePath`'s tail. Closing a merged
+    // view leaves the path, but must not restart a tail in the emptied view.
     if (sourceOpenMode !== "single-file" || !openFilePath || !formatDetected) return;
 
     const byteOffset = useLogStore.getState().byteOffset;
@@ -252,7 +251,7 @@ export function useFileWatcher() {
 
       const currentPath = state.openFilePath;
 
-      if (!currentPath || currentPath !== filePath) {
+      if (state.sourceOpenMode !== "single-file" || !currentPath || currentPath !== filePath) {
         return;
       }
 

@@ -701,6 +701,8 @@ interface LogState {
   autoCorrelate: boolean;
   correlatedEntries: CorrelatedEntry[];
   diffState: DiffState | null;
+  /** The retained view to resume when its comparison closes. */
+  preDiffSourceOpenMode: Exclude<SourceOpenMode, "diff">;
   /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
   pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
@@ -976,6 +978,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   autoCorrelate: true,
   correlatedEntries: [],
   diffState: null,
+  preDiffSourceOpenMode: null,
   pendingScrollTarget: null,
 
   hasActiveSource: () => {
@@ -1324,6 +1327,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       mergedTabState: null,
       correlatedEntries: [],
       diffState: null,
+      preDiffSourceOpenMode: null,
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -1363,6 +1367,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       mergedTabState: null,
       correlatedEntries: [],
       diffState: null,
+      preDiffSourceOpenMode: null,
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -1652,7 +1657,12 @@ export const useLogStore = create<LogState>((set, get) => ({
     const { commonKeys, onlyAKeys, onlyBKeys, entryClassification, stats } =
       classifyEntries(entriesA, entriesB);
 
+    const state = get();
     set({
+      // Replacing an active comparison keeps its original return view.
+      preDiffSourceOpenMode: state.sourceOpenMode === "diff"
+        ? state.preDiffSourceOpenMode
+        : state.sourceOpenMode,
       diffState: {
         mode: sourceA.filePath === sourceB.filePath ? "time-range" : "two-file",
         sourceA,
@@ -1672,11 +1682,15 @@ export const useLogStore = create<LogState>((set, get) => ({
   },
 
   closeDiff: () => {
-    set({
+    set((state) => ({
       diffState: null,
-      sourceOpenMode: null,
+      // A tab switch may already have selected a different view.
+      sourceOpenMode: state.sourceOpenMode === "diff"
+        ? state.preDiffSourceOpenMode
+        : state.sourceOpenMode,
+      preDiffSourceOpenMode: null,
       selectedId: null,
-    });
+    }));
   },
 
   setDiffDisplayMode: (mode) => {

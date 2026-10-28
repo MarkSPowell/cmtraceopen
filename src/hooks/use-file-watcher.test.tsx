@@ -807,4 +807,74 @@ describe("merged tab live tailing", () => {
       expect(stopTailMock).toHaveBeenCalledWith(AGENT);
     });
   });
+
+  it.each([false, true])("ignores a late batch after closing a merged tab (reset=%s)", async (reset) => {
+    await mountMerged();
+    act(() => useLogStore.getState().closeMergedTab());
+    const before = useLogStore.getState();
+
+    emit({ filePath: IME, reset, entries: [tailed(IME, 3, 5_000, "ime later")] });
+
+    expect(useLogStore.getState()).toBe(before);
+    expect(messages()).toEqual([]);
+  });
+
+  const compareSources = () => useLogStore.getState().createDiff(
+    { filePath: IME, label: "IME" },
+    { filePath: AGENT, label: "Agent" },
+  );
+
+  it.each(["single-file", "merged", "aggregate-folder"] as const)(
+    "restores %s tailing after closing a replacement diff",
+    async (mode) => {
+      seedMergedTab();
+      if (mode !== "merged") {
+        useLogStore.setState({
+          sourceOpenMode: mode,
+          mergedTabState: null,
+          entries: [tailed(IME, 1, 1_000, "ime start")],
+          aggregateFiles: mode === "aggregate-folder" ? [{
+            filePath: IME, totalLines: 1, parseErrors: 0, fileSize: 100,
+            byteOffset: 100, formatDetected: "Timestamped", parserSelection: PLAIN_SELECTION,
+          }] : [],
+        });
+      }
+      renderHook(() => useFileWatcher());
+      await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+      const initialStarts = startTailMock.mock.calls.length;
+      act(compareSources);
+      act(compareSources);
+      expect(startTailMock).toHaveBeenCalledTimes(initialStarts);
+
+      act(() => useLogStore.getState().closeDiff());
+
+      expect(useLogStore.getState().sourceOpenMode).toBe(mode);
+      await waitFor(() => expect(startTailMock).toHaveBeenCalledTimes(initialStarts * 2));
+      emit({ filePath: IME, entries: [tailed(IME, 3, 5_000, "ime later")] });
+      expect(messages().filter((message) => message === "ime later")).toHaveLength(mode === "merged" ? 2 : 1);
+    },
+  );
+
+  it("ignores ordinary tail events while a diff is active", async () => {
+    await mountMerged();
+    act(compareSources);
+    const before = useLogStore.getState();
+
+    emit({ filePath: IME, entries: [tailed(IME, 3, 5_000, "ime later")] });
+    emit({ filePath: IME, reset: true, entries: [] });
+    emit({ filePath: IME, amendments: [{
+      entryId: 0, entryLineNumber: 1, continuationStartLine: 2, continuationEndLine: 2,
+      messageUtf16Start: "ime start".length, messageSuffix: "\ncontinued", errorCodeSpans: [],
+    }] });
+
+    expect(useLogStore.getState()).toBe(before);
+  });
+
+  it("does not restore a stale diff mode after switching views", async () => {
+    await mountMerged();
+    act(compareSources);
+    act(() => useLogStore.getState().setSourceOpenMode("single-file"));
+    act(() => useLogStore.getState().closeDiff());
+    expect(useLogStore.getState().sourceOpenMode).toBe("single-file");
+  });
 });
